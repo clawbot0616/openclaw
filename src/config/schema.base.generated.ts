@@ -23062,10 +23062,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "string",
                 const: "qmd",
               },
+              {
+                type: "string",
+                const: "mem0",
+              },
+              {
+                type: "string",
+                const: "hybrid",
+              },
             ],
             title: "Memory Backend",
             description:
-              'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
+              'Selects the global memory engine: "builtin" uses OpenClaw memory internals, "qmd" uses the QMD sidecar pipeline, "mem0" uses a Mem0-compatible long-term memory service, and "hybrid" enables routed memory flows across QMD + Mem0. Keep "builtin" unless you intentionally operate an external backend.',
           },
           citations: {
             anyOf: [
@@ -23382,6 +23390,353 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
             },
             additionalProperties: false,
+          },
+          mem0: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+                title: "Mem0 Enabled",
+                description:
+                  "Enables Mem0 backend integration when memory.backend is set to mem0. Keep enabled for normal operation and disable only for staged rollout/testing.",
+              },
+              baseUrl: {
+                type: "string",
+                format: "uri",
+                title: "Mem0 Base URL",
+                description:
+                  "Base URL for the Mem0 service (for example http://localhost:8000). This is required when using memory.backend=mem0.",
+              },
+              apiKey: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+                title: "Mem0 API Key",
+                description:
+                  "API key used to authenticate with the Mem0 service. Supports plain values and SecretRef inputs.",
+              },
+              userIdPrefix: {
+                type: "string",
+                minLength: 1,
+                title: "Mem0 User ID Prefix",
+                description:
+                  "Prefix used to build Mem0 user IDs from OpenClaw session keys, helping isolate memories across environments.",
+              },
+              agentIdPrefix: {
+                type: "string",
+                minLength: 1,
+                title: "Mem0 Agent ID Prefix",
+                description:
+                  "Prefix used to build Mem0 agent IDs from OpenClaw agent IDs, helping isolate memories across deployments.",
+              },
+              searchPath: {
+                type: "string",
+                minLength: 1,
+                title: "Mem0 Search Path",
+                description:
+                  "HTTP path used for Mem0 search calls. Override only when your Mem0-compatible service exposes a non-default route.",
+              },
+              addPath: {
+                type: "string",
+                minLength: 1,
+                title: "Mem0 Add Path",
+                description:
+                  "HTTP path used for Mem0 add-memory calls. Override only when your Mem0-compatible service exposes a non-default route.",
+              },
+              topK: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Mem0 Top K",
+                description:
+                  "Default number of memories fetched per search query when maxResults is not explicitly provided.",
+              },
+              threshold: {
+                type: "number",
+                minimum: 0,
+                maximum: 1,
+                title: "Mem0 Score Threshold",
+                description:
+                  "Minimum score threshold (0-1) for accepting Mem0 search results before prompt injection.",
+              },
+              timeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Mem0 Timeout (ms)",
+                description:
+                  "Request timeout in milliseconds for Mem0 HTTP calls. Increase in slower network environments.",
+              },
+            },
+            additionalProperties: false,
+          },
+          hybrid: {
+            type: "object",
+            properties: {
+              read: {
+                type: "object",
+                properties: {
+                  mode: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "dual",
+                      },
+                      {
+                        type: "string",
+                        const: "routed",
+                      },
+                    ],
+                    title: "Hybrid Read Mode",
+                    description:
+                      'Hybrid read mode: "routed" selects one backend based on routing rules, while "dual" queries both QMD and Mem0 and merges results.',
+                  },
+                  order: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "qmd",
+                        },
+                        {
+                          type: "string",
+                          const: "mem0",
+                        },
+                      ],
+                    },
+                    title: "Hybrid Read Order",
+                    description:
+                      "Preferred backend order when dual read mode is active or when fallback merge is needed. Valid values are qmd and mem0.",
+                  },
+                  maxResults: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Hybrid Read Max Results",
+                    description:
+                      "Default maximum number of merged hybrid search results when a tool call does not pass maxResults explicitly.",
+                  },
+                  dedupe: {
+                    type: "boolean",
+                    title: "Hybrid Read Dedupe",
+                    description:
+                      "Deduplicates merged hybrid search hits by location and snippet to reduce repeated context injection.",
+                  },
+                },
+                additionalProperties: false,
+                title: "Hybrid Read Policy",
+                description:
+                  "Read-path policy for hybrid memory. Use routed mode to choose one backend by rule, or dual mode to query both backends every time.",
+              },
+              write: {
+                type: "object",
+                properties: {
+                  mode: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "dual",
+                      },
+                      {
+                        type: "string",
+                        const: "routed",
+                      },
+                    ],
+                    title: "Hybrid Write Mode",
+                    description:
+                      'Hybrid write mode: "routed" sends writes to a rule-selected backend, while "dual" attempts both backends on each write operation. Use "routed" to keep hot vs cold separation, and switch to "dual" only when explicit redundancy is required.',
+                  },
+                  successPolicy: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "any",
+                      },
+                      {
+                        type: "string",
+                        const: "all",
+                      },
+                    ],
+                    title: "Hybrid Write Success Policy",
+                    description:
+                      'Write success policy for hybrid mode: "any" succeeds when one target succeeds, while "all" requires every selected target to succeed. Use "any" for resilient production traffic, and use "all" only when strict replication is more important than availability.',
+                  },
+                },
+                additionalProperties: false,
+                title: "Hybrid Write Policy",
+                description: "Write-path policy for hybrid memory capture and sync flows.",
+              },
+              routing: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    scope: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "read",
+                        },
+                        {
+                          type: "string",
+                          const: "write",
+                        },
+                        {
+                          type: "string",
+                          const: "both",
+                        },
+                      ],
+                      title: "Hybrid Route Scope",
+                      description: 'Rule scope: "read", "write", or "both".',
+                    },
+                    source: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "query",
+                        },
+                        {
+                          type: "string",
+                          const: "conversation",
+                        },
+                        {
+                          type: "string",
+                          const: "knowledge",
+                        },
+                      ],
+                      title: "Hybrid Route Source",
+                      description:
+                        'Rule source discriminator: "query" (read flow), "conversation" (post-turn capture), or "knowledge" (sync/index flow).',
+                    },
+                    priority: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "normal",
+                        },
+                        {
+                          type: "string",
+                          const: "critical",
+                        },
+                      ],
+                      title: "Hybrid Route Priority",
+                      description:
+                        'Rule priority gate: "critical" for high-priority events only, or "normal" for default events.',
+                    },
+                    tags: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      title: "Hybrid Route Tags",
+                      description:
+                        "Optional keyword tags matched against normalized query/capture tokens before applying this route rule.",
+                    },
+                    queryIncludes: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      title: "Hybrid Route Query Includes",
+                      description:
+                        "Optional substring match list for query/capture text; a rule matches when at least one phrase appears.",
+                    },
+                    target: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "qmd",
+                        },
+                        {
+                          type: "string",
+                          const: "mem0",
+                        },
+                        {
+                          type: "string",
+                          const: "both",
+                        },
+                      ],
+                      title: "Hybrid Route Target",
+                      description:
+                        'Route target backend: "qmd", "mem0", or "both". Use "qmd" for cold technical knowledge, use "mem0" for hot user/task preference memory, and reserve "both" for critical context where redundancy is intentionally required.',
+                    },
+                  },
+                  required: ["target"],
+                  additionalProperties: false,
+                },
+                title: "Hybrid Routing Rules",
+                description:
+                  "Ordered rule list used by hybrid mode to map read/write operations to qmd, mem0, or both backends.",
+              },
+            },
+            additionalProperties: false,
+            title: "Hybrid Memory Routing",
+            description:
+              "Configures routed memory behavior when memory.backend=hybrid, including read/write mode, backend order, and routing rules.",
           },
         },
         additionalProperties: false,
@@ -26404,13 +26759,144 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "memory.backend": {
       label: "Memory Backend",
-      help: 'Selects the global memory engine: "builtin" uses OpenClaw memory internals, while "qmd" uses the QMD sidecar pipeline. Keep "builtin" unless you intentionally operate QMD.',
+      help: 'Selects the global memory engine: "builtin" uses OpenClaw memory internals, "qmd" uses the QMD sidecar pipeline, "mem0" uses a Mem0-compatible long-term memory service, and "hybrid" enables routed memory flows across QMD + Mem0. Keep "builtin" unless you intentionally operate an external backend.',
       tags: ["storage"],
     },
     "memory.citations": {
       label: "Memory Citations Mode",
       help: 'Controls citation visibility in replies: "auto" shows citations when useful, "on" always shows them, and "off" hides them. Keep "auto" for a balanced signal-to-noise default.',
       tags: ["storage"],
+    },
+    "memory.hybrid": {
+      label: "Hybrid Memory Routing",
+      help: "Configures routed memory behavior when memory.backend=hybrid, including read/write mode, backend order, and routing rules.",
+      tags: ["storage"],
+    },
+    "memory.hybrid.read": {
+      label: "Hybrid Read Policy",
+      help: "Read-path policy for hybrid memory. Use routed mode to choose one backend by rule, or dual mode to query both backends every time.",
+      tags: ["storage"],
+    },
+    "memory.hybrid.read.mode": {
+      label: "Hybrid Read Mode",
+      help: 'Hybrid read mode: "routed" selects one backend based on routing rules, while "dual" queries both QMD and Mem0 and merges results.',
+      tags: ["storage"],
+    },
+    "memory.hybrid.read.order": {
+      label: "Hybrid Read Order",
+      help: "Preferred backend order when dual read mode is active or when fallback merge is needed. Valid values are qmd and mem0.",
+      tags: ["storage"],
+    },
+    "memory.hybrid.read.maxResults": {
+      label: "Hybrid Read Max Results",
+      help: "Default maximum number of merged hybrid search results when a tool call does not pass maxResults explicitly.",
+      tags: ["performance", "storage"],
+    },
+    "memory.hybrid.read.dedupe": {
+      label: "Hybrid Read Dedupe",
+      help: "Deduplicates merged hybrid search hits by location and snippet to reduce repeated context injection.",
+      tags: ["storage"],
+    },
+    "memory.hybrid.write": {
+      label: "Hybrid Write Policy",
+      help: "Write-path policy for hybrid memory capture and sync flows.",
+      tags: ["storage"],
+    },
+    "memory.hybrid.write.mode": {
+      label: "Hybrid Write Mode",
+      help: 'Hybrid write mode: "routed" sends writes to a rule-selected backend, while "dual" attempts both backends on each write operation. Use "routed" to keep hot vs cold separation, and switch to "dual" only when explicit redundancy is required.',
+      tags: ["storage"],
+    },
+    "memory.hybrid.write.successPolicy": {
+      label: "Hybrid Write Success Policy",
+      help: 'Write success policy for hybrid mode: "any" succeeds when one target succeeds, while "all" requires every selected target to succeed. Use "any" for resilient production traffic, and use "all" only when strict replication is more important than availability.',
+      tags: ["access", "storage"],
+    },
+    "memory.hybrid.routing": {
+      label: "Hybrid Routing Rules",
+      help: "Ordered rule list used by hybrid mode to map read/write operations to qmd, mem0, or both backends.",
+      tags: ["storage"],
+    },
+    "memory.hybrid.routing[].scope": {
+      label: "Hybrid Route Scope",
+      help: 'Rule scope: "read", "write", or "both".',
+      tags: ["storage"],
+    },
+    "memory.hybrid.routing[].source": {
+      label: "Hybrid Route Source",
+      help: 'Rule source discriminator: "query" (read flow), "conversation" (post-turn capture), or "knowledge" (sync/index flow).',
+      tags: ["storage"],
+    },
+    "memory.hybrid.routing[].priority": {
+      label: "Hybrid Route Priority",
+      help: 'Rule priority gate: "critical" for high-priority events only, or "normal" for default events.',
+      tags: ["storage"],
+    },
+    "memory.hybrid.routing[].tags": {
+      label: "Hybrid Route Tags",
+      help: "Optional keyword tags matched against normalized query/capture tokens before applying this route rule.",
+      tags: ["storage"],
+    },
+    "memory.hybrid.routing[].queryIncludes": {
+      label: "Hybrid Route Query Includes",
+      help: "Optional substring match list for query/capture text; a rule matches when at least one phrase appears.",
+      tags: ["storage"],
+    },
+    "memory.hybrid.routing[].target": {
+      label: "Hybrid Route Target",
+      help: 'Route target backend: "qmd", "mem0", or "both". Use "qmd" for cold technical knowledge, use "mem0" for hot user/task preference memory, and reserve "both" for critical context where redundancy is intentionally required.',
+      tags: ["storage"],
+    },
+    "memory.mem0.enabled": {
+      label: "Mem0 Enabled",
+      help: "Enables Mem0 backend integration when memory.backend is set to mem0. Keep enabled for normal operation and disable only for staged rollout/testing.",
+      tags: ["storage"],
+    },
+    "memory.mem0.baseUrl": {
+      label: "Mem0 Base URL",
+      help: "Base URL for the Mem0 service (for example http://localhost:8000). This is required when using memory.backend=mem0.",
+      tags: ["storage", "url-secret"],
+    },
+    "memory.mem0.apiKey": {
+      label: "Mem0 API Key",
+      help: "API key used to authenticate with the Mem0 service. Supports plain values and SecretRef inputs.",
+      tags: ["security", "auth", "storage"],
+      sensitive: true,
+    },
+    "memory.mem0.userIdPrefix": {
+      label: "Mem0 User ID Prefix",
+      help: "Prefix used to build Mem0 user IDs from OpenClaw session keys, helping isolate memories across environments.",
+      tags: ["storage"],
+    },
+    "memory.mem0.agentIdPrefix": {
+      label: "Mem0 Agent ID Prefix",
+      help: "Prefix used to build Mem0 agent IDs from OpenClaw agent IDs, helping isolate memories across deployments.",
+      tags: ["storage"],
+    },
+    "memory.mem0.searchPath": {
+      label: "Mem0 Search Path",
+      help: "HTTP path used for Mem0 search calls. Override only when your Mem0-compatible service exposes a non-default route.",
+      tags: ["storage"],
+    },
+    "memory.mem0.addPath": {
+      label: "Mem0 Add Path",
+      help: "HTTP path used for Mem0 add-memory calls. Override only when your Mem0-compatible service exposes a non-default route.",
+      tags: ["storage"],
+    },
+    "memory.mem0.topK": {
+      label: "Mem0 Top K",
+      help: "Default number of memories fetched per search query when maxResults is not explicitly provided.",
+      tags: ["storage"],
+    },
+    "memory.mem0.threshold": {
+      label: "Mem0 Score Threshold",
+      help: "Minimum score threshold (0-1) for accepting Mem0 search results before prompt injection.",
+      tags: ["storage"],
+    },
+    "memory.mem0.timeoutMs": {
+      label: "Mem0 Timeout (ms)",
+      help: "Request timeout in milliseconds for Mem0 HTTP calls. Increase in slower network environments.",
+      tags: ["performance", "storage"],
     },
     "memory.qmd.command": {
       label: "QMD Binary",
