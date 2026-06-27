@@ -394,6 +394,9 @@ function copyMaterializedDependencyTree(params) {
     try {
       resolvedPath = fs.realpathSync(sourcePath);
     } catch {
+      if (path.basename(path.dirname(sourcePath)) === ".bin") {
+        return true;
+      }
       return false;
     }
     const containingRoot = findContainingRealRoot(resolvedPath, allowedRealRoots);
@@ -919,6 +922,7 @@ function runNpmInstall(params) {
     npm_config_package_lock: "false",
     npm_config_progress: "false",
     npm_config_save: "false",
+    npm_config_workspaces: "false",
     npm_config_yes: "true",
   };
   const runSpawnSync = params.spawnSyncImpl ?? spawnSync;
@@ -928,6 +932,7 @@ function runNpmInstall(params) {
     env: npmEnv,
     shell: params.npmRunner.shell,
     stdio: ["ignore", "pipe", "pipe"],
+    killSignal: "SIGKILL",
     timeout: params.timeoutMs ?? 5 * 60 * 1000,
     windowsHide: true,
     windowsVerbatimArguments: params.npmRunner.windowsVerbatimArguments,
@@ -1060,6 +1065,7 @@ function stageInstalledRootRuntimeDeps(params) {
   const optionalDependencyNames = new Set(Object.keys(packageJson.optionalDependencies ?? {}));
   const rootNodeModulesDir = path.join(repoRoot, "node_modules");
   if (Object.keys(dependencySpecs).length === 0 || !fs.existsSync(rootNodeModulesDir)) {
+    logRuntimeDepsVerbose("root-stage: no dependency specs or root node_modules missing");
     return false;
   }
 
@@ -1070,8 +1076,10 @@ function stageInstalledRootRuntimeDeps(params) {
     optionalDependencyNames,
   );
   if (directDependencyNames === null) {
+    logRuntimeDepsVerbose("root-stage: direct dependency names unresolved");
     return false;
   }
+  logRuntimeDepsVerbose(`root-stage: direct dependencies ${directDependencyNames.length}`);
   const resolution = collectInstalledRuntimeDependencyRoots(
     rootNodeModulesDir,
     dependencySpecs,
@@ -1079,9 +1087,11 @@ function stageInstalledRootRuntimeDeps(params) {
     optionalDependencyNames,
   );
   if (resolution === null) {
+    logRuntimeDepsVerbose("root-stage: dependency closure unresolved");
     return false;
   }
   const rootsToCopy = selectRuntimeDependencyRootsToCopy(resolution);
+  logRuntimeDepsVerbose(`root-stage: roots to copy ${rootsToCopy.length}`);
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   if (rootsToCopy.length === 0) {
     assertPathIsNotSymlink(nodeModulesDir, "remove runtime deps");
@@ -1104,9 +1114,11 @@ function stageInstalledRootRuntimeDeps(params) {
     for (const record of rootsToCopy.toSorted((left, right) =>
       left.name.localeCompare(right.name),
     )) {
+      logRuntimeDepsVerbose(`root-stage: copy ${record.name}`);
       const sourcePath = record.realRoot;
       const targetPath = dependencyNodeModulesPath(stagedNodeModulesDir, record.name);
       if (targetPath === null) {
+        logRuntimeDepsVerbose(`root-stage: invalid target ${record.name}`);
         return false;
       }
       fs.mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -1120,12 +1132,16 @@ function stageInstalledRootRuntimeDeps(params) {
           targetPath,
         })
       ) {
+        logRuntimeDepsVerbose(`root-stage: copy failed ${record.name}`);
         return false;
       }
     }
+    logRuntimeDepsVerbose("root-stage: prune staged cargo");
     pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
 
+    logRuntimeDepsVerbose("root-stage: replace node_modules");
     replaceDirAtomically(nodeModulesDir, stagedNodeModulesDir);
+    logRuntimeDepsVerbose("root-stage: write stamp");
     writeJsonAtomically(stampPath, {
       cheapFingerprint,
       fingerprint,
@@ -1133,7 +1149,14 @@ function stageInstalledRootRuntimeDeps(params) {
     });
     return true;
   } finally {
+    logRuntimeDepsVerbose("root-stage: cleanup temp");
     removeOwnedTempPathBestEffort(path.dirname(stagedNodeModulesDir));
+  }
+}
+
+function logRuntimeDepsVerbose(message, env = process.env) {
+  if (env.OPENCLAW_RUNTIME_DEPS_VERBOSE === "1") {
+    console.error(`[runtime-deps] ${message}`);
   }
 }
 
@@ -1142,7 +1165,9 @@ function installPluginRuntimeDepsWithRetries(params) {
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
+      logRuntimeDepsVerbose(`install: attempt ${attempt}`);
       params.install({ ...params.installParams, attempt });
+      logRuntimeDepsVerbose(`install: attempt ${attempt} complete`);
       return;
     } catch (error) {
       lastError = error;
@@ -1152,6 +1177,17 @@ function installPluginRuntimeDepsWithRetries(params) {
     }
   }
   throw lastError;
+}
+
+function createRuntimeDepsFallbackNpmArgs() {
+  return [
+    "install",
+    "--workspaces=false",
+    "--no-audit",
+    "--no-fund",
+    "--ignore-scripts",
+    "--silent",
+  ];
 }
 
 function createRootRuntimeStagingError(params) {
@@ -1188,23 +1224,27 @@ function installPluginRuntimeDeps(params) {
   } = params;
   const nodeModulesDir = path.join(pluginDir, "node_modules");
   const tempInstallDir = makePluginOwnedTempDir(pluginDir, "install");
+  logRuntimeDepsVerbose(`install ${pluginId}: temp dir created`);
   const pinnedGroups = resolvePinnedRuntimeDependencyGroups(packageJson, {
     directDependencyPackageRoot,
     rootNodeModulesDir: path.join(repoRoot, "node_modules"),
   });
   const requiredDependencyCount = Object.keys(pinnedGroups.dependencies).length;
   try {
+    logRuntimeDepsVerbose(`install ${pluginId}: write manifest`);
     writeJson(
       path.join(tempInstallDir, "package.json"),
       createRuntimeInstallManifest(pluginId, pinnedGroups),
     );
     if (requiredDependencyCount > 0 || Object.keys(pinnedGroups.optionalDependencies).length > 0) {
+      logRuntimeDepsVerbose(`install ${pluginId}: npm install start`);
       runNpmInstall({
         cwd: tempInstallDir,
         npmRunner: resolveNpmRunner({
-          npmArgs: ["install", "--no-audit", "--no-fund", "--ignore-scripts", "--silent"],
+          npmArgs: createRuntimeDepsFallbackNpmArgs(),
         }),
       });
+      logRuntimeDepsVerbose(`install ${pluginId}: npm install done`);
     }
     const stagedNodeModulesDir = path.join(tempInstallDir, "node_modules");
     if (requiredDependencyCount > 0 && !fs.existsSync(stagedNodeModulesDir)) {
@@ -1213,30 +1253,37 @@ function installPluginRuntimeDeps(params) {
       );
     }
     if (fs.existsSync(stagedNodeModulesDir)) {
+      logRuntimeDepsVerbose(`install ${pluginId}: prune staged cargo`);
       pruneStagedRuntimeDependencyCargo(stagedNodeModulesDir, pruneConfig);
+      logRuntimeDepsVerbose(`install ${pluginId}: replace node_modules`);
       replaceDirAtomically(nodeModulesDir, stagedNodeModulesDir);
     } else {
+      logRuntimeDepsVerbose(`install ${pluginId}: remove empty node_modules`);
       assertPathIsNotSymlink(nodeModulesDir, "remove runtime deps");
       removePathIfExists(nodeModulesDir);
     }
+    logRuntimeDepsVerbose(`install ${pluginId}: write stamp`);
     writeJsonAtomically(stampPath, {
       cheapFingerprint,
       fingerprint,
       generatedAt: new Date().toISOString(),
     });
   } finally {
+    logRuntimeDepsVerbose(`install ${pluginId}: cleanup temp`);
     removeOwnedTempPathBestEffort(tempInstallDir);
   }
 }
 
 export function stageBundledPluginRuntimeDeps(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const env = params.env ?? process.env;
   const installPluginRuntimeDepsImpl =
     params.installPluginRuntimeDepsImpl ?? installPluginRuntimeDeps;
   const installAttempts = params.installAttempts ?? 3;
   const pruneConfig = resolveRuntimeDepPruneConfig(params);
   for (const pluginDir of listBundledPluginRuntimeDirs(repoRoot)) {
     const pluginId = path.basename(pluginDir);
+    logRuntimeDepsVerbose(`start ${pluginId}`, env);
     const sourcePluginRoot = resolveInstalledWorkspacePluginRoot(repoRoot, pluginId);
     const directDependencyPackageRoot = fs.existsSync(path.join(sourcePluginRoot, "package.json"))
       ? sourcePluginRoot
@@ -1248,6 +1295,7 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
     removePathIfExists(legacyStampPath);
     removeStaleRuntimeDepsTempDirs(pluginDir);
     if (!hasRuntimeDeps(packageJson) || !shouldStageRuntimeDeps(packageJson)) {
+      logRuntimeDepsVerbose(`skip ${pluginId}: no staged runtime deps`, env);
       removePathIfExists(nodeModulesDir);
       removePathIfExists(stampPath);
       continue;
@@ -1255,19 +1303,24 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
     const cheapFingerprint = createRuntimeDepsCheapFingerprint(packageJson, pruneConfig, {
       repoRoot,
     });
+    logRuntimeDepsVerbose(`fingerprint ${pluginId}: cheap done`, env);
     const stamp = readRuntimeDepsStamp(stampPath);
     const rootInstalledRuntimeFingerprint = resolveInstalledRuntimeClosureFingerprint({
       directDependencyPackageRoot,
       packageJson,
       rootNodeModulesDir: path.join(repoRoot, "node_modules"),
     });
+    logRuntimeDepsVerbose(`fingerprint ${pluginId}: root closure done`, env);
     const fingerprint = createRuntimeDepsFingerprint(packageJson, pruneConfig, {
       repoRoot,
       rootInstalledRuntimeFingerprint,
     });
+    logRuntimeDepsVerbose(`fingerprint ${pluginId}: combined done`, env);
     if (fs.existsSync(nodeModulesDir) && stamp?.fingerprint === fingerprint) {
+      logRuntimeDepsVerbose(`skip ${pluginId}: fingerprint unchanged`, env);
       continue;
     }
+    logRuntimeDepsVerbose(`stage ${pluginId}: materialize from root workspace`, env);
     if (
       stageInstalledRootRuntimeDeps({
         directDependencyPackageRoot,
@@ -1280,8 +1333,10 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
         stampPath,
       })
     ) {
+      logRuntimeDepsVerbose(`staged ${pluginId}: materialized from root workspace`, env);
       continue;
     }
+    logRuntimeDepsVerbose(`install ${pluginId}: materializing via package manager`, env);
     try {
       installPluginRuntimeDepsWithRetries({
         attempts: installAttempts,
@@ -1301,10 +1356,12 @@ export function stageBundledPluginRuntimeDeps(params = {}) {
     } catch (error) {
       throw createRootRuntimeStagingError({ packageJson, pluginId, cause: error });
     }
+    logRuntimeDepsVerbose(`staged ${pluginId}: installed fallback dependencies`, env);
   }
 }
 
 export const __testing = {
+  createRuntimeDepsFallbackNpmArgs,
   removeStaleRuntimeDepsTempDirs,
   replaceDirAtomically,
   runNpmInstall,
