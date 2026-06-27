@@ -52,6 +52,8 @@ export type MemorySearchManagerResult = {
   error?: string;
 };
 
+export type MemorySearchManagerPurpose = "cli" | "default" | "status";
+
 async function getOrCreateMem0Manager(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -87,7 +89,7 @@ async function getOrCreateQmdManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
   resolvedQmd?: ResolvedQmdConfig;
-  purpose?: "default" | "status";
+  purpose?: MemorySearchManagerPurpose;
 }): Promise<MemorySearchManager | null> {
   if (!params.resolvedQmd) {
     return null;
@@ -160,7 +162,7 @@ function buildHybridCacheKey(params: {
   qmd?: ResolvedQmdConfig;
   mem0?: unknown;
   hybrid?: ResolvedHybridConfig;
-  purpose?: "default" | "status";
+  purpose?: MemorySearchManagerPurpose;
 }): string {
   return `${params.agentId}:${params.purpose ?? "default"}:${JSON.stringify({
     qmd: params.qmd,
@@ -172,7 +174,7 @@ function buildHybridCacheKey(params: {
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: "default" | "status";
+  purpose?: MemorySearchManagerPurpose;
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
   if (resolved.backend === "mem0") {

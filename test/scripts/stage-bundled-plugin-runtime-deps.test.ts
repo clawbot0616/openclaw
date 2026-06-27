@@ -149,6 +149,7 @@ describe("stageBundledPluginRuntimeDeps", () => {
       "npm.cmd",
       ["install", "--silent"],
       expect.objectContaining({
+        killSignal: "SIGKILL",
         windowsHide: true,
         windowsVerbatimArguments: true,
       }),
@@ -175,8 +176,15 @@ describe("stageBundledPluginRuntimeDeps", () => {
       expect.objectContaining({
         env: expect.objectContaining({
           npm_config_dry_run: "false",
+          npm_config_workspaces: "false",
         }),
       }),
+    );
+  });
+
+  it("keeps fallback runtime installs outside inherited npm workspaces", () => {
+    expect(stageBundledPluginRuntimeDepsTesting.createRuntimeDepsFallbackNpmArgs()).toContain(
+      "--workspaces=false",
     );
   });
 
@@ -608,12 +616,14 @@ describe("stageBundledPluginRuntimeDeps", () => {
         if (entry.name !== "package.json") {
           return entry;
         }
-        return {
-          ...entry,
-          isSymbolicLink: () => true,
-          isDirectory: () => false,
-          isFile: () => false,
-        } as fs.Dirent;
+        const symlinkEntry = Object.assign(
+          Object.create(Object.getPrototypeOf(entry)),
+          entry,
+        ) as fs.Dirent;
+        symlinkEntry.isSymbolicLink = () => true;
+        symlinkEntry.isDirectory = () => false;
+        symlinkEntry.isFile = () => false;
+        return symlinkEntry;
       }) as never;
     }) as typeof fs.readdirSync);
 
@@ -712,6 +722,47 @@ describe("stageBundledPluginRuntimeDeps", () => {
     ).toBe("module.exports = 1;\n");
     expect(fs.existsSync(path.join(pluginDir, ".openclaw-runtime-deps-stamp.json"))).toBe(false);
     expect(fs.existsSync(runtimeDepsStampPath(repoRoot))).toBe(true);
+  });
+
+  it("skips broken package-manager bin shims when staging installed runtime deps", () => {
+    const { pluginDir, repoRoot } = createBundledPluginFixture({
+      packageJson: {
+        name: "@openclaw/fixture-plugin",
+        version: "1.0.0",
+        dependencies: { direct: "1.0.0" },
+        openclaw: { bundle: { stageRuntimeDependencies: true } },
+      },
+    });
+    const rootDepDir = path.join(repoRoot, "node_modules", "direct");
+    fs.mkdirSync(path.join(rootDepDir, "node_modules", ".bin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDepDir, "package.json"),
+      '{ "name": "direct", "version": "1.0.0" }\n',
+      "utf8",
+    );
+    fs.writeFileSync(path.join(rootDepDir, "index.js"), "module.exports = 1;\n", "utf8");
+    fs.symlinkSync(
+      "../missing-cli/bin/run.js",
+      path.join(rootDepDir, "node_modules", ".bin", "missing-cli"),
+    );
+
+    let installCount = 0;
+    stageBundledPluginRuntimeDeps({
+      cwd: repoRoot,
+      installPluginRuntimeDepsImpl: () => {
+        installCount += 1;
+      },
+    });
+
+    expect(installCount).toBe(0);
+    expect(
+      fs.readFileSync(path.join(pluginDir, "node_modules", "direct", "index.js"), "utf8"),
+    ).toBe("module.exports = 1;\n");
+    expect(
+      fs.existsSync(
+        path.join(pluginDir, "node_modules", "direct", "node_modules", ".bin", "missing-cli"),
+      ),
+    ).toBe(false);
   });
 
   it("removes legacy runtime dependency stamps from dist", () => {
